@@ -1,0 +1,76 @@
+name: nightly
+
+# Every night, if main has new commits since the last nightly, builds it and
+# publishes the archives to the rolling "nightly" pre-release (the "nightly"
+# tag is moved to the built commit). Manual runs always build.
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: check for changes
+        id: changes
+        run: |
+          head=$(git rev-parse HEAD)
+          last=$(git rev-parse -q --verify 'refs/tags/nightly^{commit}' || true)
+          if [ "$GITHUB_EVENT_NAME" = schedule ] && [ "$head" = "$last" ]; then
+            echo "No new commits since the last nightly ($last): nothing to do."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-go@v5
+        if: steps.changes.outputs.build == 'true'
+        with:
+          go-version-file: go.mod
+      - name: test
+        if: steps.changes.outputs.build == 'true'
+        run: go test ./...
+      - name: build archives
+        if: steps.changes.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          name=apple-remote-kodi-connector
+          version=nightly-$(date -u +%Y%m%d)-$(git rev-parse --short HEAD)
+          mkdir dist
+          for arch in amd64 arm64; do
+            pkg=$name-nightly-linux-$arch
+            mkdir -p "dist/$pkg/bin"
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w -X main.version=$version" -o "dist/$pkg/bin/$name" ./cmd/$name
+            cp -r install.sh uninstall.sh packaging configs README.md LICENSE "dist/$pkg/"
+            tar -C dist -czf "dist/$pkg.tar.gz" "$pkg"
+          done
+          (cd dist && sha256sum ./*.tar.gz | sed 's# \./# #' > SHA256SUMS && cat SHA256SUMS)
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: publish
+        if: steps.changes.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          git tag -f nightly "$sha"
+          git push -f origin refs/tags/nightly
+          notes="Development build $VERSION from main ($sha). Not a stable release.
+          Install: curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/get.sh | sudo VERSION=nightly bash -s -- install kodi"
+          if ! gh release view nightly >/dev/null 2>&1; then
+            gh release create nightly --prerelease --title "Nightly" --notes "$notes" --verify-tag
+          fi
+          gh release upload nightly dist/*.tar.gz dist/SHA256SUMS --clobber
+          gh release edit nightly --prerelease --notes "$notes"

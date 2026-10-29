@@ -8,6 +8,7 @@
 # The user defaults to "kodi". Environment variables:
 #   VERSION=v1.2.3     install a given release instead of the latest one
 #                      (default: latest stable release, or newest pre-release)
+#                      VERSION=nightly installs the latest development build
 #   KODI_PASSWORD=...  Kodi web server password (otherwise asked on first install)
 set -euo pipefail
 
