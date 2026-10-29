@@ -24,7 +24,7 @@ It reads the Mac's built-in infrared receiver, tells short, long and extra-long 
 | OS | Linux Mint 22 (Ubuntu 24.04 based), X11 session with Cinnamon. |
 | Kodi | Kodi 21 installed with **Flatpak** (`tv.kodi.Kodi`). |
 | User | A dedicated user (e.g. `kodi`) with automatic login. The program runs as that user, without root. |
-| Build | Go ≥ 1.22 (`sudo apt install golang-go`). |
+| Install | `curl` and `sudo`. Go ≥ 1.22 only to build from source. |
 | Input Remapper | Not needed. If installed, it must not have a preset loaded for the IR receiver, or it would block the remote. |
 
 ## Features
@@ -62,7 +62,15 @@ Recommended in Cinnamon (as `kodi`): closing the lid should not suspend the comp
 
 ## Installation
 
-As a user with `sudo`, on the computer itself:
+Run it on the computer itself, as a user with `sudo`, ideally with Kodi open so that the final check is complete.
+
+**From the latest release** (no Go needed):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rulix-dev/apple-remote-kodi-connector/main/get.sh | sudo bash -s -- install kodi
+```
+
+**From source** (needs Go ≥ 1.22):
 
 ```bash
 sudo apt install golang-go git
@@ -71,15 +79,17 @@ cd apple-remote-kodi-connector
 sudo ./install.sh kodi
 ```
 
+The only input needed is the **Kodi web server password**, asked once on the first install (or passed in the `KODI_PASSWORD` environment variable).
+
 The installer:
 
-1. Builds the program and installs it to `/usr/local/bin/`.
+1. Installs the program to `/usr/local/bin/`.
 2. Gives the user of the active session access to **the IR receiver only**, and lets the remote wake the computer up (udev rule).
-3. Creates the configuration in `~kodi/.config/apple-remote-kodi-connector/` and asks for the Kodi web server password, stored in a file readable by `kodi` only.
+3. Creates the configuration in `~kodi/.config/apple-remote-kodi-connector/` and stores the Kodi password in a file readable by `kodi` only.
 4. Installs and starts a systemd user service that starts with the `kodi` session and restarts if it fails.
-5. Checks the installation (ideally with Kodi open).
+5. Checks the installation.
 
-To **update**, run `git pull` and `sudo ./install.sh kodi` again. The configuration and the password are kept.
+To **update**, run the same command again (`get.sh install`, or `git pull` + `install.sh`). The configuration and the password are kept. To install a given release, set `VERSION`, e.g. `... | sudo VERSION=v0.1.0 bash -s -- install kodi`.
 
 ## Configuration
 
@@ -120,9 +130,11 @@ To see the codes the remote sends, stop the service and run `apple-remote-kodi-c
 ## Uninstallation
 
 ```bash
-sudo ./uninstall.sh kodi           # removes the program, the service and the udev rule
-sudo ./uninstall.sh kodi --purge   # also deletes the configuration and the password
+sudo /usr/local/lib/apple-remote-kodi-connector/uninstall.sh kodi           # program, service and udev rule
+sudo /usr/local/lib/apple-remote-kodi-connector/uninstall.sh kodi --purge   # also the configuration and password
 ```
+
+The same with the one-liner: `curl -fsSL .../get.sh | sudo bash -s -- uninstall kodi [--purge]`. No input is needed.
 
 Kodi is not modified: its web server stays as you configured it.
 

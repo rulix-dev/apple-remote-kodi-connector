@@ -3,14 +3,18 @@
 #
 #   sudo ./install.sh [user]        (default: kodi)
 #
-# Safe to run again to update: the existing configuration and password are kept.
-# To uninstall: sudo ./uninstall.sh [user]
+# Works from a git checkout (builds with Go) or from a release archive (uses the
+# prebuilt binary). Safe to run again to update: the configuration and the
+# password are kept. On first install it asks for the Kodi web server password,
+# unless KODI_PASSWORD is set.
+# To uninstall: sudo /usr/local/lib/apple-remote-kodi-connector/uninstall.sh [user]
 set -euo pipefail
 
 NAME=apple-remote-kodi-connector
 REPO=$(cd "$(dirname "$0")" && pwd)
 TARGET=${1:-kodi}
 BIN=/usr/local/bin/$NAME
+LIB=/usr/local/lib/$NAME
 RULE=/etc/udev/rules.d/71-$NAME.rules
 
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -38,13 +42,30 @@ trigger_ir_receiver() {
   udevadm settle
 }
 
-step "Building"
-if [ -x "$REPO/bin/$NAME" ]; then
-  echo "Using the already built binary: bin/$NAME"
-else
+# Reads the Kodi password from $KODI_PASSWORD or, if unset, from the terminal
+# (also when this script is piped into bash, e.g. by get.sh).
+read_password() {
+  if [ -n "${KODI_PASSWORD:-}" ]; then
+    printf '%s' "$KODI_PASSWORD"
+    return
+  fi
+  [ -r /dev/tty ] || die "no terminal to ask for the Kodi password: set KODI_PASSWORD"
+  local p1 p2
+  read -rsp "Kodi web server password (not shown): " p1 </dev/tty; echo >&2
+  read -rsp "Repeat it: " p2 </dev/tty; echo >&2
+  [ "$p1" = "$p2" ] || die "passwords do not match"
+  [ -n "$p1" ] || die "empty password"
+  printf '%s' "$p1"
+}
+
+if [ -f "$REPO/go.mod" ]; then
+  step "Building"
   command -v go >/dev/null || die "Go is needed to build: sudo apt install golang-go"
   builder=${SUDO_USER:-root}
-  sudo -u "$builder" sh -c "cd '$REPO' && CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o bin/$NAME ./cmd/$NAME"
+  version=$(git -C "$REPO" describe --tags --always --dirty 2>/dev/null || echo dev)
+  sudo -u "$builder" sh -c "cd '$REPO' && CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w -X main.version=$version' -o bin/$NAME ./cmd/$NAME"
+else
+  [ -x "$REPO/bin/$NAME" ] || die "bin/$NAME not found"
 fi
 
 step "Stopping any running instance"
@@ -53,6 +74,9 @@ pkill -u "$TARGET" -f "/$NAME( |\$)" 2>/dev/null || true
 
 step "Installing the program to $BIN"
 install -m 0755 "$REPO/bin/$NAME" "$BIN"
+install -d "$LIB"
+install -m 0755 "$REPO/uninstall.sh" "$LIB/uninstall.sh"
+echo "Version: $("$BIN" -version)"
 
 step "IR receiver permissions (udev rule)"
 install -m 0644 "$REPO/packaging/udev/71-$NAME.rules" "$RULE"
@@ -78,11 +102,9 @@ fi
 if [ -f "$CONF/kodi-password" ]; then
   echo "Keeping the existing Kodi password"
 else
-  read -rsp "Kodi web server password (not shown): " p1; echo
-  read -rsp "Repeat it: " p2; echo
-  [ "$p1" = "$p2" ] || die "passwords do not match"
-  (umask 077; printf '%s' "$p1" > "$CONF/kodi-password")
-  unset p1 p2
+  pw=$(read_password)
+  (umask 077; printf '%s' "$pw" > "$CONF/kodi-password")
+  unset pw
   echo "Saved to kodi-password (readable by $TARGET only)"
 fi
 chown "$TARGET:$TGROUP" "$CONF"/*
@@ -111,3 +133,4 @@ fi
 
 step "Done"
 echo "Logs (as $TARGET):  journalctl --user -u $NAME -f"
+echo "Uninstall:          sudo $LIB/uninstall.sh $TARGET [--purge]"

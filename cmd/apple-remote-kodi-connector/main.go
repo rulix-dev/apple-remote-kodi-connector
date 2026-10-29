@@ -8,6 +8,7 @@
 //	apple-remote-kodi-connector [-config path]          run
 //	apple-remote-kodi-connector -diag                   also log every key event
 //	apple-remote-kodi-connector -check                  verify setup and exit
+//	apple-remote-kodi-connector -version                print the version
 package main
 
 import (
@@ -32,6 +33,9 @@ import (
 	"github.com/rulix-dev/apple-remote-kodi-connector/internal/tv"
 )
 
+// version is set at build time: -ldflags "-X main.version=v1.2.3".
+var version = "dev"
+
 const (
 	retryDelay    = 2 * time.Second
 	actionTimeout = 15 * time.Second
@@ -42,7 +46,13 @@ func main() {
 	configPath := flag.String("config", config.DefaultPath(), "configuration file")
 	diag := flag.Bool("diag", false, "log every key event of the device (to discover button codes)")
 	check := flag.Bool("check", false, "verify configuration, device access and Kodi JSON-RPC, then exit")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
@@ -69,7 +79,7 @@ func main() {
 		slog.Error("cannot read Kodi password", "err", err)
 		os.Exit(1)
 	}
-	slog.Info("starting", "config", *configPath, "password_from", source, "kodi_url", cfg.Kodi.URL)
+	slog.Info("starting", "version", version, "config", *configPath, "password_from", source, "kodi_url", cfg.Kodi.URL)
 
 	rpc := kodi.NewClient(cfg.Kodi.URL, cfg.Kodi.Username, password, cfg.Kodi.Timeout)
 	proc := kodi.NewProcess(cfg.Kodi.FlatpakID, cfg.Kodi.Binary)

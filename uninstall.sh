@@ -3,6 +3,9 @@
 #
 #   sudo ./uninstall.sh [user] [--purge]     (default user: kodi)
 #
+# The installer also copies this script to
+# /usr/local/lib/apple-remote-kodi-connector/uninstall.sh.
+#
 # --purge also deletes the configuration and the stored password.
 # Kodi itself is not modified (its web server stays as you configured it).
 set -euo pipefail
@@ -35,6 +38,7 @@ as_user systemctl --user daemon-reload 2>/dev/null || true
 
 step "Removing the program"
 rm -f "/usr/local/bin/$NAME"
+rm -rf "/usr/local/lib/$NAME"
 
 step "Removing the udev rule"
 rm -f "/etc/udev/rules.d/71-$NAME.rules"
