@@ -1,9 +1,16 @@
 name: release
 
-# Push a tag like v1.2.3 to build the binaries and publish a GitHub release.
+# Builds the binaries and attaches them to the GitHub release of a tag.
+# Triggered by pushing a tag like v1.2.3 (also when the release is created from
+# the GitHub UI), or manually for an existing tag.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build (e.g. v1.2.3)
+        required: true
 
 permissions:
   contents: write
@@ -11,8 +18,12 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -22,7 +33,7 @@ jobs:
         run: |
           set -euo pipefail
           name=apple-remote-kodi-connector
-          tag=$GITHUB_REF_NAME
+          tag=$TAG
           mkdir dist
           for arch in amd64 arm64; do
             pkg=$name-$tag-linux-$arch
@@ -36,4 +47,10 @@ jobs:
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS --title "$GITHUB_REF_NAME" --generate-notes
+        run: |
+          # The release may already exist (created from the GitHub UI).
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.tar.gz dist/SHA256SUMS --clobber
+          else
+            gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS --title "$TAG" --generate-notes
+          fi

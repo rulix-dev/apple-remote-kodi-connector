@@ -7,6 +7,7 @@
 #
 # The user defaults to "kodi". Environment variables:
 #   VERSION=v1.2.3     install a given release instead of the latest one
+#                      (default: latest stable release, or newest pre-release)
 #   KODI_PASSWORD=...  Kodi web server password (otherwise asked on first install)
 set -euo pipefail
 
@@ -39,9 +40,15 @@ esac
 
 tag=${VERSION:-}
 if [ -z "$tag" ]; then
-  latest=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$GH_REPO/releases/latest")
+  # Latest stable release; if there is none yet, the newest pre-release.
+  latest=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$GH_REPO/releases/latest" 2>/dev/null || true)
   tag=${latest##*/}
-  case $tag in v*) ;; *) die "no release found at https://github.com/$GH_REPO/releases" ;; esac
+  case $tag in
+    v*) ;;
+    *) tag=$(curl -fsSL "https://api.github.com/repos/$GH_REPO/releases?per_page=20" |
+      grep -o '"tag_name": *"v[^"]*"' | head -1 | sed 's/.*"\(v[^"]*\)"/\1/') ;;
+  esac
+  [ -n "$tag" ] || die "no release found at https://github.com/$GH_REPO/releases"
 fi
 
 pkg=$NAME-$tag-linux-$arch
