@@ -31,3 +31,8 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# apple-remote-kodi-connector
+/bin/
+kodi-password
+/scripts/dev/

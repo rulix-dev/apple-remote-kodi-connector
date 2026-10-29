@@ -1,0 +1,14 @@
+# apple-remote-kodi-connector: access to the Apple IR receiver (USB 05ac:8242)
+# for the user of the active local session (the auto-login Kodi user).
+#
+# TAG+="uaccess" makes systemd-logind grant a read/write ACL only to the user
+# with the active session on the seat, and revoke it when the user changes.
+# It does not affect any other input device and does not require adding the
+# user to the "input" group (which would expose every keyboard).
+#
+# Must sort before 73-seat-late.rules, which applies uaccess.
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="8242", TAG+="uaccess"
+
+# Let the IR receiver wake the computer from suspend: any Apple Remote button
+# wakes it up. Affects this USB device only.
+ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="05ac", ATTR{idProduct}=="8242", ATTR{power/wakeup}="enabled"

@@ -1,0 +1,13 @@
+[Unit]
+Description=Apple Remote to Kodi connector
+Documentation=https://github.com/rulix-dev/apple-remote-kodi-connector
+# Keep retrying forever: the remote or the display may appear later.
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/usr/local/bin/apple-remote-kodi-connector
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,132 @@
+# apple-remote-kodi-connector: example configuration.
+# Default location: ~/.config/apple-remote-kodi-connector/config.yaml
+# Changes apply when the service restarts (no rebuild needed).
+# Durations accept ms and s: 700ms, 1.5s, 20s.
+
+device:
+  # Apple IR receiver, found by its USB ID (lsusb: 05ac:8242).
+  # Virtual devices (such as Input Remapper's "forwarded" one) are ignored.
+  vendor: "05ac"
+  product: "8242"
+  # path: /dev/input/by-id/usb-Apple_Computer__Inc._IR_Receiver-event-ir  # fixed alternative
+  #
+  # grab: true  -> the program owns the remote: the desktop (Cinnamon, X11) and
+  #                Kodi do not receive its buttons (e.g. no system volume changes).
+  #                Buttons not listed under "buttons" do nothing.
+  # grab: false -> other programs keep receiving the buttons.
+  grab: true
+
+# Default long-press threshold. Each button can override it.
+long_press: 700ms
+# Extra-long-press threshold (only for buttons with "extra_long").
+extra_long_press: 5s
+# Buttons with "repeat: true" act on press and, while held, repeat after
+# repeat_delay every repeat_interval (like a keyboard).
+repeat_delay: 400ms
+repeat_interval: 150ms
+
+kodi:
+  url: http://127.0.0.1:8080/jsonrpc
+  username: kodi
+  # The password does NOT go here. It is read from the KODI_PASSWORD environment
+  # variable or, if unset, from this file, which must have 0600 permissions.
+  password_file: ~/.config/apple-remote-kodi-connector/kodi-password
+  timeout: 3s               # limit for each HTTP request
+  flatpak_id: tv.kodi.Kodi
+  binary: /app/lib/kodi/kodi.bin
+  window_class: kodi.Kodi   # window WM_CLASS (wmctrl -lx), used by toggle_fullscreen
+  # After launching Kodi, presses that need Kodi are ignored for this long while
+  # it starts (and a second instance is never launched).
+  startup_grace: 60s
+  # How long to wait for Kodi to exit after Application.Quit.
+  quit_timeout: 20s
+  # If Application.Quit fails or Kodi does not exit in time, send SIGTERM to
+  # this user's kodi.bin process only (Kodi shuts down cleanly).
+  signal_fallback: true
+
+# Idle limit: if Kodi is playing and no Apple Remote button has been pressed for
+# after_minutes, Kodi shows "Are you still there?" and pauses if nobody presses
+# a button within warning_seconds. Any button restarts the count.
+# Does not depend on the network or the TV.
+idle_pause:
+  enabled: true
+  after_minutes: 60
+  warning_seconds: 20
+
+# Auto pause: pauses whatever Kodi is playing (never resumes).
+# Two rules, both with the laptop lid CLOSED:
+#   1. No external display is connected (e.g. the cable was unplugged).
+#   2. The external display is still "connected" but the TV is off: the TV stops
+#      answering on the network ("tv" section). TVs keep HDMI active in standby,
+#      so turning them off with their remote can only be detected over the network.
+auto_pause:
+  enabled: true
+  poll_interval: 250ms
+  debounce: 1s        # rule 1: how long the condition must hold
+  # Rule 2 (optional, LG webOS TVs on the same network): enable it and set the
+  # TV's physical address (MAC). To find it, with the TV on:
+  #   ip neigh        (or on the TV: Settings > Network > Advanced settings)
+  tv:
+    enabled: false
+    mac: "aa:bb:cc:dd:ee:ff"   # TV physical address (does not change; the IP may)
+    port: 3000                 # webOS API port: only open while the TV is on
+    poll_interval: 2s
+    debounce: 3s               # rule 2: how long the TV must stay unreachable
+
+# Button mapping. Keys: Linux key names (or their numeric code).
+# Apple Remote buttons: KEY_MENU, KEY_PLAYPAUSE, KEY_ENTER (center),
+# KEY_VOLUMEUP (up), KEY_VOLUMEDOWN (down), KEY_BACK (left), KEY_FORWARD (right).
+#
+# Actions:
+#   back_or_launch     Kodi open: Input.Back. Kodi closed: launches it.
+#   back               Input.Back
+#   launch             launches Kodi if it is not open
+#   quit               closes Kodi (Application.Quit)
+#   toggle_fullscreen  brings Kodi to the front and toggles windowed / fullscreen
+#   pause              pauses whatever is playing (never resumes)
+#   suspend            pauses Kodi if playing and suspends the computer
+#   key:<key>          presses a keyboard key in Kodi (Input.ButtonEvent). It goes
+#                      through Kodi's keymaps, so it does what the keyboard does on
+#                      each screen: key:up, key:down, key:left, key:right,
+#                      key:return, key:space, key:escape...
+#   volume:+N / -N     raises / lowers Kodi's volume by N points (0-100),
+#                      e.g. volume:+5. With action:volumeup Kodi decides the step.
+#   action:<name>      runs a Kodi action (Input.ExecuteAction), e.g.
+#                      action:playpause, action:stop, action:contextmenu, action:info
+#
+# Per-button options:
+#   short       action for a short press.
+#   long        action for a long press (long_press). Empty: no long press.
+#   extra_long  action as soon as extra_long_press is reached, without waiting for
+#               the release. On a button with extra_long, "long" is decided on
+#               release (between long_press and extra_long_press) instead of at once.
+#   repeat      true: "short" runs on press and repeats while held (no long actions).
+#   in_window   replaces "short" while a given Kodi window is active (checked with
+#               GUI.GetProperties on each press). Windows: fullscreenvideo,
+#               videoosd (menu over the video), visualisation, slideshow, home,
+#               or a numeric window id.
+buttons:
+  KEY_MENU:
+    short: back_or_launch
+    long: quit
+  KEY_PLAYPAUSE:
+    short: "action:playpause"
+    long: toggle_fullscreen   # decided on release on this button (it has extra_long)
+    extra_long: suspend       # as soon as extra_long_press is reached, while held
+  KEY_ENTER:                  # center
+    short: "key:return"
+    long: "action:contextmenu"
+  KEY_VOLUMEUP:               # up
+    short: "key:up"
+    repeat: true
+    in_window: {fullscreenvideo: "volume:+5"}
+  KEY_VOLUMEDOWN:             # down
+    short: "key:down"
+    repeat: true
+    in_window: {fullscreenvideo: "volume:-5"}
+  KEY_BACK:                   # left
+    short: "key:left"
+    repeat: true
+  KEY_FORWARD:                # right
+    short: "key:right"
+    repeat: true
