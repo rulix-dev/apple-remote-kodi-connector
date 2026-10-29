@@ -91,6 +91,8 @@ The installer:
 
 To **update**, run the same command again (`get.sh install`, or `git pull` + `install.sh`). The configuration and the password are kept. To install a given release, set `VERSION`, e.g. `... | sudo VERSION=v0.1.0 bash -s -- install kodi`.
 
+**Nightly builds:** every night, if `main` has changed, a development build is published as the `nightly` pre-release. Install it with `... | sudo VERSION=nightly bash -s -- install kodi`.
+
 ## Configuration
 
 File: `~/.config/apple-remote-kodi-connector/config.yaml` (of the `kodi` user). It is commented; the most common settings:
