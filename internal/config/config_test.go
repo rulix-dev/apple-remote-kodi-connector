@@ -172,3 +172,17 @@ func TestHWDecodeCodecs(t *testing.T) {
 		t.Fatalf("hw_decode_codecs must replace the default, got %v, %v", c.Kodi.HWDecodeCodecs, err)
 	}
 }
+
+func TestDatadogEnabledByDefault(t *testing.T) {
+	c, err := Parse([]byte("{}"))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if !c.Datadog.Enabled || c.Datadog.Env != "prod" {
+		t.Fatalf("Datadog defaults = enabled %v env %q, want true and prod", c.Datadog.Enabled, c.Datadog.Env)
+	}
+	c, err = Parse([]byte("datadog: {enabled: false}"))
+	if err != nil || c.Datadog.Enabled {
+		t.Fatalf("datadog.enabled: false must turn it off (err %v)", err)
+	}
+}

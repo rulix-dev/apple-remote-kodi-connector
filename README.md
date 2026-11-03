@@ -111,19 +111,19 @@ After changing it, restart the service (as `kodi`):
 systemctl --user restart apple-remote-kodi-connector
 ```
 
-## Datadog (optional)
+## Datadog
 
-With a [Datadog Agent](https://docs.datadoghq.com/agent/) on the computer, the daemon can send metrics (button presses, actions, Kodi API latency and errors, TV and display state…), an event for every new item Kodi starts playing, and traces of every press. Enable it in the configuration:
+With a [Datadog Agent](https://docs.datadoghq.com/agent/) on the computer, the daemon sends metrics (button presses, actions, Kodi API latency and errors, TV and display state…), an event for every new item Kodi starts playing, and traces of every press. It is **enabled by default** with `env:prod`, and works the same if the agent is not running. To change it:
 
 ```yaml
 log:
-  format: json
+  format: json     # JSON log, correlated with the traces
 datadog:
-  enabled: true
-  env: home
+  enabled: true    # false to turn it off
+  env: prod
 ```
 
-The list of metrics, events and spans is in [docs/DATADOG.md](docs/DATADOG.md). The daemon works the same if the agent is not running.
+The list of metrics, events and spans is in [docs/DATADOG.md](docs/DATADOG.md).
 
 ## Troubleshooting
 

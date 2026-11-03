@@ -83,8 +83,8 @@ type Log struct {
 	Format string `yaml:"format"` // text or json
 }
 
-// Datadog configures metrics (DogStatsD), events and traces (APM). Disabled
-// by default; when enabled, the program works the same if the agent is down.
+// Datadog configures metrics (DogStatsD), events and traces (APM). Enabled
+// by default (env "prod"); the program works the same if the agent is down.
 type Datadog struct {
 	Enabled            bool          `yaml:"enabled"`
 	Service            string        `yaml:"service"`
@@ -203,7 +203,7 @@ func defaults() Config {
 		IdlePause: IdlePause{Enabled: true, AfterMinutes: 60, WarningSeconds: 20},
 		Log:       Log{Format: "text"},
 		Datadog: Datadog{
-			Service: "apple-remote-kodi-connector", AgentHost: "localhost",
+			Enabled: true, Service: "apple-remote-kodi-connector", Env: "prod", AgentHost: "localhost",
 			StatsdPort: 8125, TracePort: 8126, Tracing: true, NowPlayingInterval: 10 * time.Second,
 		},
 		AutoPause: AutoPause{
