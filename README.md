@@ -24,7 +24,7 @@ It reads the Mac's built-in infrared receiver, tells short, long and extra-long 
 | OS | Linux Mint 22 (Ubuntu 24.04 based), X11 session with Cinnamon. |
 | Kodi | Kodi 21 installed with **Flatpak** (`tv.kodi.Kodi`). |
 | User | A dedicated user (e.g. `kodi`) with automatic login. The program runs as that user, without root. |
-| Install | `curl` and `sudo`. Go ≥ 1.22 only to build from source. |
+| Install | `curl` and `sudo`. Go only to build from source. |
 | Input Remapper | Not needed. If installed, it must not have a preset loaded for the IR receiver, or it would block the remote. |
 
 ## Features
@@ -70,7 +70,7 @@ Run it on the computer itself, as a user with `sudo`, ideally with Kodi open so 
 curl -fsSL https://raw.githubusercontent.com/rulix-dev/apple-remote-kodi-connector/main/get.sh | sudo bash -s -- install kodi
 ```
 
-**From source** (needs Go ≥ 1.22):
+**From source** (needs Go; the `golang-go` package downloads the required version automatically):
 
 ```bash
 sudo apt install golang-go git
@@ -110,6 +110,20 @@ After changing it, restart the service (as `kodi`):
 ```bash
 systemctl --user restart apple-remote-kodi-connector
 ```
+
+## Datadog (optional)
+
+With a [Datadog Agent](https://docs.datadoghq.com/agent/) on the computer, the daemon can send metrics (button presses, actions, Kodi API latency and errors, TV and display state…), an event for every new item Kodi starts playing, and traces of every press. Enable it in the configuration:
+
+```yaml
+log:
+  format: json
+datadog:
+  enabled: true
+  env: home
+```
+
+The list of metrics, events and spans is in [docs/DATADOG.md](docs/DATADOG.md). The daemon works the same if the agent is not running.
 
 ## Troubleshooting
 

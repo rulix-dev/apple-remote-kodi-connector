@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/rulix-dev/apple-remote-kodi-connector/internal/telemetry"
 )
 
 // UnitName is the transient systemd user unit Kodi is launched in. Running
@@ -35,7 +37,9 @@ func NewProcess(appID, binary string) *Process {
 // Running reports whether a Kodi instance of this user exists, including one
 // that is still starting: it is listed by `flatpak ps` (which covers the
 // sandbox before kodi.bin appears) or a kodi.bin process is present.
-func (p *Process) Running(ctx context.Context) bool {
+func (p *Process) Running(ctx context.Context) (running bool) {
+	span, ctx := telemetry.StartChildSpan(ctx, "kodi.process", "running")
+	defer func() { span.SetTag("running", running); span.Finish(nil) }()
 	out, err := exec.CommandContext(ctx, "flatpak", "ps", "--columns=application").Output()
 	if err != nil {
 		slog.Warn("flatpak ps failed; checking /proc only", "err", err)
@@ -89,7 +93,9 @@ func (p *Process) Session(ctx context.Context) SessionEnv {
 }
 
 // Launch starts Kodi in its own transient systemd user unit.
-func (p *Process) Launch(ctx context.Context) error {
+func (p *Process) Launch(ctx context.Context) (err error) {
+	span, ctx := telemetry.StartChildSpan(ctx, "kodi.process", "launch")
+	defer func() { span.Finish(err) }()
 	e := p.Session(ctx)
 	if e.Display == "" && e.Wayland == "" {
 		return fmt.Errorf("no graphical session found for uid %d (DISPLAY unknown)", p.uid)
@@ -129,7 +135,9 @@ func fileExists(path string) bool {
 // Raise brings the Kodi window to the front of the graphical session, using
 // wmctrl (or xdotool as a fallback) with the session's DISPLAY/XAUTHORITY.
 // windowClass is matched against WM_CLASS, e.g. "kodi.Kodi".
-func (p *Process) Raise(ctx context.Context, windowClass string) error {
+func (p *Process) Raise(ctx context.Context, windowClass string) (err error) {
+	span, ctx := telemetry.StartChildSpan(ctx, "kodi.process", "raise")
+	defer func() { span.Finish(err) }()
 	e := p.Session(ctx)
 	if e.Display == "" {
 		return fmt.Errorf("no X11 display found for uid %d", p.uid)
@@ -158,6 +166,8 @@ func (p *Process) Raise(ctx context.Context, windowClass string) error {
 // Suspend suspends the computer through logind (systemctl suspend). The
 // user of the active local session is allowed to do it without a password.
 func (p *Process) Suspend(ctx context.Context) error {
+	span, ctx := telemetry.StartChildSpan(ctx, "system", "suspend")
+	defer span.Finish(nil)
 	out, err := exec.CommandContext(ctx, "systemctl", "suspend").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("systemctl suspend: %w: %s", err, strings.TrimSpace(string(out)))

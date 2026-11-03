@@ -8,9 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sync/atomic"
 	"time"
+
+	"github.com/rulix-dev/apple-remote-kodi-connector/internal/telemetry"
 )
 
 // ErrUnauthorized means Kodi rejected the credentials (HTTP 401).
@@ -45,8 +48,43 @@ func NewClient(url, username, password string, timeout time.Duration) *Client {
 	return &Client{url: url, username: username, password: password, hc: &http.Client{Timeout: timeout}}
 }
 
-// Call invokes method with params and decodes the result into result (if non-nil).
-func (c *Client) Call(ctx context.Context, method string, params, result any) error {
+// Call invokes method with params and decodes the result into result (if
+// non-nil). It records the latency and errors per method (kodi.rpc.*) and, when
+// ctx carries a trace, a "kodi.rpc" span.
+func (c *Client) Call(ctx context.Context, method string, params, result any) (err error) {
+	span, ctx := telemetry.StartChildSpan(ctx, "kodi.rpc", method, telemetry.T("rpc.method", method))
+	start := time.Now()
+	defer func() {
+		status := "ok"
+		if err != nil {
+			status = "error"
+			telemetry.Count("kodi.rpc.errors", "method:"+method, "error:"+errorClass(err))
+		}
+		telemetry.Duration("kodi.rpc.duration", time.Since(start), "method:"+method, "status:"+status)
+		span.Finish(err)
+	}()
+	return c.call(ctx, method, params, result)
+}
+
+// errorClass classifies an error for the "error" metric tag.
+func errorClass(err error) string {
+	var rpcErr *RPCError
+	var netErr net.Error
+	switch {
+	case errors.Is(err, ErrUnauthorized):
+		return "unauthorized"
+	case errors.As(err, &rpcErr):
+		return "rpc"
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
+		return "timeout"
+	case errors.As(err, &netErr):
+		return "connection"
+	default:
+		return "other"
+	}
+}
+
+func (c *Client) call(ctx context.Context, method string, params, result any) error {
 	req := map[string]any{"jsonrpc": "2.0", "method": method, "id": c.nextID.Add(1)}
 	if params != nil {
 		req["params"] = params
@@ -200,6 +238,85 @@ func (c *Client) AdjustVolume(ctx context.Context, delta int) (int, error) {
 		return 0, err
 	}
 	return v, nil
+}
+
+// Item is what a Kodi player is playing.
+type Item struct {
+	Player    string // video, audio, picture
+	Type      string // movie, episode, song, musicvideo, channel, unknown...
+	Label     string
+	Title     string
+	ShowTitle string
+	Season    int
+	Episode   int
+	Year      int
+	Playing   bool // false when paused
+}
+
+// MediaType is Type, or the player type if Kodi does not know the item type.
+func (it Item) MediaType() string {
+	if it.Type != "" && it.Type != "unknown" {
+		return it.Type
+	}
+	return it.Player
+}
+
+// Display is a human-readable name: "Show S01E02 · Title", "Title (2001)"...
+func (it Item) Display() string {
+	title := it.Title
+	if title == "" {
+		title = it.Label
+	}
+	switch {
+	case it.ShowTitle != "" && it.Season >= 0 && it.Episode > 0:
+		return fmt.Sprintf("%s S%02dE%02d · %s", it.ShowTitle, it.Season, it.Episode, title)
+	case it.Year > 0:
+		return fmt.Sprintf("%s (%d)", title, it.Year)
+	default:
+		return title
+	}
+}
+
+// NowPlaying returns what the first active player is playing, or nil if
+// nothing is playing.
+func (c *Client) NowPlaying(ctx context.Context) (*Item, error) {
+	var players []struct {
+		PlayerID int    `json:"playerid"`
+		Type     string `json:"type"`
+	}
+	if err := c.Call(ctx, "Player.GetActivePlayers", nil, &players); err != nil {
+		return nil, err
+	}
+	if len(players) == 0 {
+		return nil, nil
+	}
+	p := players[0]
+	var r struct {
+		Item struct {
+			Type      string `json:"type"`
+			Label     string `json:"label"`
+			Title     string `json:"title"`
+			ShowTitle string `json:"showtitle"`
+			Season    int    `json:"season"`
+			Episode   int    `json:"episode"`
+			Year      int    `json:"year"`
+		} `json:"item"`
+	}
+	params := map[string]any{"playerid": p.PlayerID, "properties": []string{"title", "year", "showtitle", "season", "episode"}}
+	if err := c.Call(ctx, "Player.GetItem", params, &r); err != nil {
+		return nil, err
+	}
+	var props struct {
+		Speed float64 `json:"speed"`
+	}
+	if err := c.Call(ctx, "Player.GetProperties", map[string]any{"playerid": p.PlayerID, "properties": []string{"speed"}}, &props); err != nil {
+		return nil, err
+	}
+	it := r.Item
+	return &Item{
+		Player: p.Type, Type: it.Type, Label: it.Label, Title: it.Title, ShowTitle: it.ShowTitle,
+		Season: it.Season, Episode: it.Episode, Year: it.Year, Playing: props.Speed != 0,
+	}, nil
 }
 
 // CurrentWindow returns the id of the active Kodi window (see WindowID).

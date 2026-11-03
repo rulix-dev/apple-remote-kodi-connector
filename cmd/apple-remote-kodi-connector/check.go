@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"github.com/rulix-dev/apple-remote-kodi-connector/internal/display"
 	"github.com/rulix-dev/apple-remote-kodi-connector/internal/evdev"
 	"github.com/rulix-dev/apple-remote-kodi-connector/internal/kodi"
+	"github.com/rulix-dev/apple-remote-kodi-connector/internal/telemetry"
 	"github.com/rulix-dev/apple-remote-kodi-connector/internal/tv"
 )
 
@@ -116,6 +118,22 @@ func runCheck(ctx context.Context, cfg *config.Config, path string) bool {
 		pass("XAUTHORITY=%s", sess.XAuthority)
 	} else if sess.Display != "" {
 		warn("XAUTHORITY unknown (~/.Xauthority not found); Kodi may fail to open the display")
+	}
+
+	fmt.Println("Datadog")
+	if dd := cfg.Datadog; !dd.Enabled {
+		pass("disabled in configuration")
+	} else {
+		tc := telemetry.Config{Service: dd.Service, Env: dd.Env, AgentHost: dd.AgentHost,
+			StatsdPort: dd.StatsdPort, TracePort: dd.TracePort}.Resolve()
+		pass("service=%s env=%s, metrics to %s:%d (UDP), log format %s", tc.Service, tc.Env, tc.AgentHost, tc.StatsdPort, cfg.Log.Format)
+		addr := net.JoinHostPort(tc.AgentHost, strconv.Itoa(tc.TracePort))
+		if c, err := net.DialTimeout("tcp", addr, time.Second); err != nil {
+			warn("trace agent %s not reachable: %v (the daemon works anyway)", addr, err)
+		} else {
+			c.Close()
+			pass("trace agent %s reachable", addr)
+		}
 	}
 
 	fmt.Println("Idle pause (no remote activity)")

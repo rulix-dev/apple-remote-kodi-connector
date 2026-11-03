@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/rulix-dev/apple-remote-kodi-connector/internal/config"
+	"github.com/rulix-dev/apple-remote-kodi-connector/internal/telemetry"
 )
 
 // RPC is the subset of the Kodi JSON-RPC client used by the controller.
@@ -207,8 +208,10 @@ func (c *Controller) launch(ctx context.Context) (Outcome, error) {
 		return IgnoredStarting, nil
 	}
 	if err := c.proc.Launch(ctx); err != nil {
+		telemetry.Count("kodi.launch", "status:error")
 		return Failed, fmt.Errorf("launch Kodi: %w", err)
 	}
+	telemetry.Count("kodi.launch", "status:ok")
 	c.mu.Lock()
 	c.launchedAt = c.now()
 	c.mu.Unlock()
@@ -223,6 +226,7 @@ func (c *Controller) quit(ctx context.Context) (Outcome, error) {
 		return NotRunning, nil
 	}
 	c.setQuitting(true)
+	telemetry.Count("kodi.quit", "via:rpc")
 	signalled := false
 	if err := c.rpc.Quit(ctx); err != nil {
 		if !c.opts.SignalFallback {
@@ -230,6 +234,7 @@ func (c *Controller) quit(ctx context.Context) (Outcome, error) {
 			return Failed, fmt.Errorf("quit Kodi: %w", err)
 		}
 		slog.Warn("Application.Quit failed; sending SIGTERM to kodi.bin as fallback", "err", err)
+		telemetry.Count("kodi.quit.sigterm", "reason:rpc_failed")
 		if _, terr := c.proc.Terminate(); terr != nil {
 			c.setQuitting(false)
 			return Failed, errors.Join(fmt.Errorf("quit Kodi: %w", err), terr)
@@ -258,6 +263,7 @@ func (c *Controller) awaitExit(signalled bool) {
 			return
 		}
 		slog.Warn("Kodi did not exit in time; sending SIGTERM to kodi.bin", "waited", c.opts.QuitTimeout)
+		telemetry.Count("kodi.quit.sigterm", "reason:timeout")
 		if _, err := c.proc.Terminate(); err != nil {
 			slog.Error("SIGTERM to kodi.bin failed", "err", err)
 			return

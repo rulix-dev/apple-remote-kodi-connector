@@ -13,8 +13,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -23,6 +25,8 @@ import (
 	"syscall"
 	"time"
 
+	slogtrace "github.com/DataDog/dd-trace-go/contrib/log/slog/v2"
+
 	"github.com/rulix-dev/apple-remote-kodi-connector/internal/button"
 	"github.com/rulix-dev/apple-remote-kodi-connector/internal/config"
 	"github.com/rulix-dev/apple-remote-kodi-connector/internal/controller"
@@ -30,6 +34,7 @@ import (
 	"github.com/rulix-dev/apple-remote-kodi-connector/internal/evdev"
 	"github.com/rulix-dev/apple-remote-kodi-connector/internal/idle"
 	"github.com/rulix-dev/apple-remote-kodi-connector/internal/kodi"
+	"github.com/rulix-dev/apple-remote-kodi-connector/internal/telemetry"
 	"github.com/rulix-dev/apple-remote-kodi-connector/internal/tv"
 )
 
@@ -40,7 +45,11 @@ const (
 	retryDelay    = 2 * time.Second
 	actionTimeout = 15 * time.Second
 	actionQueue   = 8
+	// gaugeRefresh re-sends state gauges that otherwise only change rarely.
+	gaugeRefresh = time.Minute
 )
+
+var errQueueFull = errors.New("action queue full")
 
 func main() {
 	configPath := flag.String("config", config.DefaultPath(), "configuration file")
@@ -61,6 +70,7 @@ func main() {
 		slog.Error("cannot load configuration", "path", *configPath, "err", err)
 		os.Exit(1)
 	}
+	setupLogger(cfg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -81,6 +91,18 @@ func main() {
 	}
 	slog.Info("starting", "version", version, "config", *configPath, "password_from", source, "kodi_url", cfg.Kodi.URL)
 
+	if dd := cfg.Datadog; dd.Enabled {
+		stopTelemetry, err := telemetry.Start(telemetry.Config{
+			Service: dd.Service, Env: dd.Env, Version: version, AgentHost: dd.AgentHost,
+			StatsdPort: dd.StatsdPort, TracePort: dd.TracePort, Tracing: dd.Tracing,
+		})
+		if err != nil {
+			slog.Warn("datadog telemetry disabled", "err", err)
+		}
+		defer stopTelemetry()
+		go heartbeat(ctx)
+	}
+
 	rpc := kodi.NewClient(cfg.Kodi.URL, cfg.Kodi.Username, password, cfg.Kodi.Timeout)
 	proc := kodi.NewProcess(cfg.Kodi.FlatpakID, cfg.Kodi.Binary)
 	ctl := controller.New(rpc, proc, controller.Options{
@@ -100,11 +122,7 @@ func main() {
 	var idleW *idle.Watcher
 	if ip := cfg.IdlePause; ip.Enabled {
 		idleW = idle.New(time.Duration(ip.AfterMinutes)*time.Minute, time.Duration(ip.WarningSeconds)*time.Second, rpc, func() {
-			select {
-			case actions <- request{action: config.ActionPause}:
-			default:
-				slog.Warn("action queue full; idle pause dropped")
-			}
+			enqueue(ctx, actions, config.ActionPause, "idle_pause", "no_remote_activity")
 		})
 		go func() {
 			tick := time.NewTicker(time.Second)
@@ -121,6 +139,10 @@ func main() {
 			}
 		}()
 		slog.Info("idle pause enabled", "after_minutes", ip.AfterMinutes, "warning_seconds", ip.WarningSeconds)
+	}
+
+	if cfg.Datadog.Enabled {
+		go nowPlaying(ctx, rpc, proc, cfg.Datadog.NowPlayingInterval)
 	}
 
 	r := &reader{cfg: cfg, diag: *diag, actions: actions, idle: idleW}
@@ -141,11 +163,51 @@ func ensureRuntimeDir(ctx context.Context, proc *kodi.Process) {
 	}
 }
 
+// setupLogger writes the log to stderr (the journal) as text or JSON. With
+// Datadog enabled, records logged with a traced context carry dd.trace_id and
+// dd.span_id, to correlate logs and traces.
+func setupLogger(cfg *config.Config) {
+	var h slog.Handler = slog.NewTextHandler(os.Stderr, nil)
+	if cfg.Log.Format == "json" {
+		h = slog.NewJSONHandler(os.Stderr, nil)
+	}
+	if cfg.Datadog.Enabled {
+		h = slogtrace.WrapHandler(h)
+	}
+	slog.SetDefault(slog.New(h))
+}
+
+// heartbeat sends apple_remote.up periodically, to alert if the daemon stops.
+func heartbeat(ctx context.Context) {
+	tick := time.NewTicker(gaugeRefresh)
+	defer tick.Stop()
+	for {
+		telemetry.Gauge("apple_remote.up", 1)
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
+}
+
 // request is an action to execute, with optional per-window overrides.
 type request struct {
 	action   string
 	inWindow map[int]string
-	repeat   bool // repeated while the button is held: logged at debug level
+	repeat   bool            // repeated while the button is held: logged at debug level
+	span     *telemetry.Span // root span of the press (or automatic action), finished by the worker
+}
+
+// enqueue queues an automatic action (not triggered by a button) in its own trace.
+func enqueue(ctx context.Context, actions chan<- request, action, operation, reason string) {
+	span, _ := telemetry.StartSpan(ctx, operation, reason, telemetry.T("action", action))
+	select {
+	case actions <- request{action: action, span: span}:
+	default:
+		slog.Warn("action queue full; automatic action dropped", "action", action, "reason", reason)
+		span.Finish(errQueueFull)
+	}
 }
 
 // autoPause polls the lid, the display outputs and (optionally) the network
@@ -166,27 +228,32 @@ func autoPause(ctx context.Context, cfg config.AutoPause, actions chan<- request
 	tick := time.NewTicker(cfg.PollInterval)
 	defer tick.Stop()
 	var last string
+	var lastGauge time.Time
 	for {
 		st, _ := rd.Read()
-		if desc := fmt.Sprintf("lid_closed=%v external=%v", st.LidClosed, st.External); desc != last {
+		now := time.Now()
+		desc := fmt.Sprintf("lid_closed=%v external=%v", st.LidClosed, st.External)
+		changed := desc != last
+		if changed {
 			slog.Info("display state", "lid_closed", st.LidClosed, "external", st.External)
 			last = desc
 		}
-		now := time.Now()
-		reason := ""
+		if changed || now.Sub(lastGauge) >= gaugeRefresh {
+			telemetry.Bool("apple_remote.display.lid_closed", st.LidClosed)
+			telemetry.Gauge("apple_remote.display.external", float64(len(st.External)))
+			lastGauge = now
+		}
+		reason, tag := "", ""
 		if noDisplay.Update(st.Unwatched(), now) {
-			reason = "lid closed and no external display"
+			reason, tag = "lid closed and no external display", "no_display"
 		}
 		if tvGone.Update(cfg.TV.Enabled && st.TVOff(tvOff.Load()), now) {
-			reason = "lid closed and TV turned off"
+			reason, tag = "lid closed and TV turned off", "tv_off"
 		}
 		if reason != "" {
 			slog.Info("pausing Kodi: " + reason)
-			select {
-			case actions <- request{action: config.ActionPause}:
-			default:
-				slog.Warn("action queue full; auto pause dropped")
-			}
+			telemetry.Count("apple_remote.auto_pause", "reason:"+tag)
+			enqueue(ctx, actions, config.ActionPause, "auto_pause", tag)
 		}
 		select {
 		case <-ctx.Done():
@@ -204,11 +271,26 @@ func watchTV(ctx context.Context, cfg config.TV, off *atomic.Bool) {
 	defer tick.Stop()
 	first := true
 	for {
-		on := p.On(ctx)
-		if first || off.Load() == on {
-			slog.Info("TV state", "on", on, "ip", p.IP(), "mac", cfg.MAC)
+		// One trace per probe, kept only when the state changes.
+		span, sctx := telemetry.StartSpan(ctx, "tv.probe", "webos")
+		on := p.On(sctx)
+		span.SetTag("tv.on", on)
+		if changed := off.Load() == on; first || changed {
+			slog.InfoContext(sctx, "TV state", "on", on, "ip", p.IP(), "mac", cfg.MAC)
+			if !first {
+				state := "off"
+				if on {
+					state = "on"
+				}
+				telemetry.Count("apple_remote.tv.state_change", "state:"+state)
+			}
+			span.Keep()
 			first = false
+		} else {
+			span.Drop()
 		}
+		span.Finish(nil)
+		telemetry.Bool("apple_remote.tv.on", on)
 		off.Store(!on)
 		select {
 		case <-ctx.Done():
@@ -225,19 +307,29 @@ func worker(ctx context.Context, ctl *controller.Controller, actions <-chan requ
 		case <-ctx.Done():
 			return
 		case req := <-actions:
-			actx, cancel := context.WithTimeout(ctx, actionTimeout)
+			actx, cancel := context.WithTimeout(telemetry.ContextWithSpan(ctx, req.span), actionTimeout)
+			span, actx := telemetry.StartChildSpan(actx, "controller.action", req.action)
 			start := time.Now()
 			action, out, err := ctl.DoIn(actx, req.action, req.inWindow)
-			cancel()
-			took := time.Since(start).Round(time.Millisecond)
+			took := time.Since(start)
+			outcome := telemetry.Slug(string(out))
+			span.SetTag("action", action)
+			span.SetTag("outcome", outcome)
+			span.Finish(err)
+			req.span.SetTag("outcome", outcome)
+			req.span.Finish(err)
+			telemetry.Count("apple_remote.action", "action:"+action, "outcome:"+outcome)
+			telemetry.Duration("apple_remote.action.duration", took, "action:"+action)
+			took = took.Round(time.Millisecond)
 			switch {
 			case err != nil:
-				slog.Error("action failed", "action", action, "err", err, "took", took)
+				slog.ErrorContext(actx, "action failed", "action", action, "err", err, "took", took)
 			case req.repeat:
-				slog.Debug("action done", "action", action, "outcome", out, "took", took)
+				slog.DebugContext(actx, "action done", "action", action, "outcome", out, "took", took)
 			default:
-				slog.Info("action done", "action", action, "outcome", out, "took", took)
+				slog.InfoContext(actx, "action done", "action", action, "outcome", out, "took", took)
 			}
+			cancel()
 		}
 	}
 }
@@ -254,9 +346,11 @@ func (r *reader) run(ctx context.Context) {
 	var lastErr string
 	for {
 		err := r.listen(ctx)
+		telemetry.Bool("apple_remote.device.connected", false)
 		if ctx.Err() != nil {
 			return
 		}
+		telemetry.Count("apple_remote.device.errors", "error:"+deviceErrorClass(err))
 		// Log each distinct error once so a missing device does not flood the log.
 		if msg := err.Error(); msg != lastErr {
 			slog.Warn("device unavailable, retrying", "err", err, "every", retryDelay)
@@ -293,6 +387,8 @@ func (r *reader) listen(ctx context.Context) error {
 		}
 	}
 	slog.Info("listening", "device", dev.Path, "name", dev.Name, "grab", r.cfg.Device.Grab)
+	telemetry.Bool("apple_remote.device.connected", true)
+	telemetry.Count("apple_remote.device.connect")
 
 	type readResult struct {
 		events []evdev.Event
@@ -392,6 +488,7 @@ func (r *reader) resolved(ev button.Event) {
 	case button.ExtraLong:
 		req = request{action: b.ExtraLong}
 	case button.Repeat:
+		telemetry.Count("apple_remote.button.press", "key:"+key, "press:repeat")
 		// While held, only queue a repeat if Kodi has caught up, so that
 		// releasing the button stops the movement immediately.
 		if b.Short != "" && len(r.actions) == 0 {
@@ -402,13 +499,50 @@ func (r *reader) resolved(ev button.Event) {
 		slog.Info("release", "key", key, "kind", ev.Kind, "held", held)
 		return
 	}
-	slog.Info("press", "key", key, "kind", ev.Kind, "held", held, "action", req.action)
+	press := pressTag(ev.Kind)
+	telemetry.Count("apple_remote.button.press", "key:"+key, "press:"+press)
 	if req.action == "" {
+		slog.Info("press", "key", key, "kind", ev.Kind, "held", held, "action", "")
 		return
 	}
+	// One trace per press: button.press > controller.action > kodi.rpc / kodi.process.
+	span, sctx := telemetry.StartSpan(context.Background(), "button.press", key+" "+press,
+		telemetry.T("key", key), telemetry.T("press", press), telemetry.T("action", req.action),
+		telemetry.T("held_ms", held.Milliseconds()))
+	req.span = span
+	slog.InfoContext(sctx, "press", "key", key, "kind", ev.Kind, "held", held, "action", req.action)
 	select {
 	case r.actions <- req:
 	default:
-		slog.Warn("action queue full; press dropped", "key", key, "action", req.action)
+		slog.WarnContext(sctx, "action queue full; press dropped", "key", key, "action", req.action)
+		span.Finish(errQueueFull)
+	}
+}
+
+// pressTag is the "press" metric tag of a button event.
+func pressTag(k button.Kind) string {
+	switch k {
+	case button.Long:
+		return "long"
+	case button.ExtraLong:
+		return "extralong"
+	case button.Repeat:
+		return "repeat"
+	default:
+		return "short"
+	}
+}
+
+// deviceErrorClass classifies why the IR receiver could not be used.
+func deviceErrorClass(err error) string {
+	switch {
+	case errors.Is(err, evdev.ErrNotFound):
+		return "not_found"
+	case errors.Is(err, fs.ErrPermission):
+		return "permission"
+	case errors.Is(err, syscall.EBUSY):
+		return "busy"
+	default:
+		return "read"
 	}
 }
