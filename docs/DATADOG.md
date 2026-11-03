@@ -22,12 +22,15 @@ Enabled by default (`datadog.enabled: true`, `env: prod`; see `configs/config.ex
 | `kodi.rpc.duration` | distribution (ms) | `method`, `status:ok\|error` | Kodi JSON-RPC latency |
 | `kodi.rpc.errors` | count | `method`, `error:unauthorized\|rpc\|timeout\|connection\|other` | Kodi JSON-RPC errors |
 | `kodi.running` | gauge | — | 1 while Kodi is running |
-| `kodi.player.active` | gauge | `media_type` | 1 while something is loaded in a player (`media_type`: `movie`, `episode`, `song`, `musicvideo`, `channel`, `video`, `audio`…; `none` when idle) |
-| `kodi.player.playing` | gauge | `media_type` | 1 while it is playing (0 when paused) |
-| `kodi.player.started` / `kodi.player.stopped` | count | `media_type` | Items started / playback stopped |
+| `kodi.player.active` | gauge | `media_type`, + video tags | 1 while something is loaded in a player (`media_type`: `movie`, `episode`, `song`, `musicvideo`, `channel`, `video`, `audio`…; `none` when idle) |
+| `kodi.player.playing` | gauge | `media_type`, + video tags | 1 while it is playing (0 when paused) |
+| `kodi.player.started` | count | `media_type`, + video tags | Items started |
+| `kodi.player.stopped` | count | `media_type` | Playback stopped |
 | `kodi.launch` | count | `status:ok\|error` | Kodi launched from the remote |
 | `kodi.quit` | count | `via:rpc` | Kodi closed from the remote |
 | `kodi.quit.sigterm` | count | `reason:rpc_failed\|timeout` | Fallback SIGTERM to Kodi |
+
+**Video tags** (videos with a known format): `video_codec` (as reported by Kodi: `hevc`, `h264`, `mpeg4`…), `resolution` (`2160p`, `1080p`, `720p`, `480p`, `sd`) and `decode` (`hardware` if the codec is in `kodi.hw_decode_codecs`, otherwise `cpu`).
 
 Go runtime metrics (`runtime.go.*`) are also sent by the tracer.
 
@@ -35,7 +38,9 @@ Go runtime metrics (`runtime.go.*`) are also sent by the tracer.
 
 | Title | Tags | When |
 |---|---|---|
-| `Kodi: now playing <title>` | `media_type`, `player` (source type: `kodi`) | A new item starts playing. `<title>` is `Show S01E02 · Episode`, `Movie (2001)` or the song title |
+| `Kodi: now playing <title>` | `media_type`, `player`, video tags, `audio_codec` (source type: `kodi`) | A new item starts playing. `<title>` is `Show S01E02 · Episode`, `Movie (2001)` or the song title. The first line of the text is the format, e.g. `HEVC · 1080p · CPU · EAC3 6ch` (`HDR10` after the resolution for HDR videos; only `FLAC 2ch` for music) |
+
+For a new video, the event waits up to two polls (about 20 s) for Kodi to report the stream format; if it is still unknown, it is sent without it.
 
 ## Traces (APM)
 
@@ -51,3 +56,5 @@ Repeated presses while a button is held are counted but not traced.
 ## Logs
 
 The daemon logs to stderr, so systemd stores it in the journal of the user unit `apple-remote-kodi-connector.service`. With `log.format: json` every record is a JSON object (`time`, `level`, `msg` and attributes); records logged during a traced press also carry `dd.trace_id` and `dd.span_id`.
+
+The `now playing` record has `title`, `media_type`, `player` and, when known, `video_codec`, `width`, `height`, `resolution`, `decode`, `hdr`, `audio_codec` and `audio_channels`.

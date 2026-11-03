@@ -43,6 +43,10 @@ kodi:
   # If Application.Quit fails or Kodi does not exit in time, send SIGTERM to
   # this user's kodi.bin process only (Kodi shuts down cleanly).
   signal_fallback: true
+  # Video codecs (Kodi names) decoded by the GPU; the rest is reported as decoded
+  # by the CPU (Datadog "decode" tag). Default: what an Intel HD 3000 accelerates
+  # with VA-API (i965 driver).
+  hw_decode_codecs: [h264, mpeg2video, vc1, wmv3]
 
 # Idle limit: if Kodi is playing and no Apple Remote button has been pressed for
 # after_minutes, Kodi shows "Are you still there?" and pauses if nobody presses

@@ -142,7 +142,7 @@ func main() {
 	}
 
 	if cfg.Datadog.Enabled {
-		go nowPlaying(ctx, rpc, proc, cfg.Datadog.NowPlayingInterval)
+		go nowPlaying(ctx, rpc, proc, cfg.Datadog.NowPlayingInterval, cfg.Kodi.HWDecodeCodecs)
 	}
 
 	r := &reader{cfg: cfg, diag: *diag, actions: actions, idle: idleW}
