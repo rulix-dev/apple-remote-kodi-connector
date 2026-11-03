@@ -71,6 +71,8 @@ func TestParseRejectsInvalid(t *testing.T) {
 		"extra_long < long": "buttons: {KEY_MENU: {short: back, long: quit, extra_long: suspend, extra_long_press: 500ms}}",
 		"repeat+extra_long": `buttons: {KEY_MENU: {short: "key:up", repeat: true, extra_long: suspend}}`,
 		"idle zero":         "idle_pause: {enabled: true, after_minutes: 0}",
+		"bad log format":    "log: {format: xml}",
+		"dd no interval":    "datadog: {enabled: true, now_playing_interval: 0s}",
 		"bad tv mac":        "auto_pause: {tv: {enabled: true, mac: nope}}",
 		"bad window":        `buttons: {KEY_MENU: {short: back, in_window: {nope: back}}}`,
 		"bad override":      `buttons: {KEY_MENU: {short: back, in_window: {fullscreenvideo: explode}}}`,
@@ -145,5 +147,17 @@ buttons:
 	want := button.Spec{LongPress: 700 * time.Millisecond, ExtraLong: 5 * time.Second}
 	if got := c.Specs()[164]; got != want {
 		t.Fatalf("Specs()[KEY_PLAYPAUSE] = %+v, want %+v", got, want)
+	}
+}
+
+func TestDatadogDefaults(t *testing.T) {
+	c, err := Parse([]byte("datadog: {enabled: true, env: home}\nlog: {format: json}"))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	d := c.Datadog
+	if !d.Enabled || d.Env != "home" || d.Service != "apple-remote-kodi-connector" || d.StatsdPort != 8125 ||
+		d.TracePort != 8126 || !d.Tracing || d.NowPlayingInterval != 10*time.Second || c.Log.Format != "json" {
+		t.Fatalf("datadog/log config = %+v %+v", d, c.Log)
 	}
 }

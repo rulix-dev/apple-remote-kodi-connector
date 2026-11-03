@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/rulix-dev/apple-remote-kodi-connector/internal/telemetry"
 )
 
 // Kodi is what the watcher needs from Kodi.
@@ -55,9 +57,11 @@ func (w *Watcher) Step(ctx context.Context) {
 		switch {
 		case last.After(warnedAt):
 			slog.Info("idle warning answered")
+			telemetry.Count("apple_remote.idle_pause", "result:answered")
 			w.setWarned(time.Time{})
 		case now.Sub(warnedAt) >= w.Grace:
 			slog.Info("idle warning not answered: pausing Kodi", "grace", w.Grace)
+			telemetry.Count("apple_remote.idle_pause", "result:paused")
 			w.Pause()
 			w.mu.Lock()
 			w.warnedAt, w.last = time.Time{}, now // start a new period
@@ -76,6 +80,7 @@ func (w *Watcher) Step(ctx context.Context) {
 	if err := w.Kodi.Notify(ctx, "Are you still there?", msg, w.Grace); err != nil {
 		slog.Warn("cannot show idle warning in Kodi", "err", err)
 	}
+	telemetry.Count("apple_remote.idle_pause", "result:warned")
 	slog.Info("no remote activity: idle warning shown", "idle_for", now.Sub(last).Round(time.Second), "grace", w.Grace)
 	w.setWarned(now)
 }

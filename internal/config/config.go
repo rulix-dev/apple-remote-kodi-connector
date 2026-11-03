@@ -64,6 +64,8 @@ type Config struct {
 	Kodi           Kodi              `yaml:"kodi"`
 	AutoPause      AutoPause         `yaml:"auto_pause"`
 	IdlePause      IdlePause         `yaml:"idle_pause"`
+	Log            Log               `yaml:"log"`
+	Datadog        Datadog           `yaml:"datadog"`
 	Buttons        map[string]Button `yaml:"buttons"`
 }
 
@@ -74,6 +76,24 @@ type AutoPause struct {
 	PollInterval time.Duration `yaml:"poll_interval"`
 	Debounce     time.Duration `yaml:"debounce"`
 	TV           TV            `yaml:"tv"`
+}
+
+// Log configures the program's own log, written to stderr (the journal).
+type Log struct {
+	Format string `yaml:"format"` // text or json
+}
+
+// Datadog configures metrics (DogStatsD), events and traces (APM). Disabled
+// by default; when enabled, the program works the same if the agent is down.
+type Datadog struct {
+	Enabled            bool          `yaml:"enabled"`
+	Service            string        `yaml:"service"`
+	Env                string        `yaml:"env"`
+	AgentHost          string        `yaml:"agent_host"`
+	StatsdPort         int           `yaml:"statsd_port"`
+	TracePort          int           `yaml:"trace_port"`
+	Tracing            bool          `yaml:"tracing"`
+	NowPlayingInterval time.Duration `yaml:"now_playing_interval"`
 }
 
 // IdlePause warns in Kodi after AfterMinutes without any press on the remote
@@ -177,6 +197,11 @@ func defaults() Config {
 			SignalFallback: true,
 		},
 		IdlePause: IdlePause{Enabled: true, AfterMinutes: 60, WarningSeconds: 20},
+		Log:       Log{Format: "text"},
+		Datadog: Datadog{
+			Service: "apple-remote-kodi-connector", AgentHost: "localhost",
+			StatsdPort: 8125, TracePort: 8126, Tracing: true, NowPlayingInterval: 10 * time.Second,
+		},
 		AutoPause: AutoPause{
 			Enabled: true, PollInterval: 250 * time.Millisecond, Debounce: time.Second,
 			TV: TV{Port: 3000, PollInterval: 2 * time.Second, Debounce: 3 * time.Second},
@@ -233,6 +258,12 @@ func (c *Config) validate() error {
 		if tv.Port <= 0 || tv.Port > 65535 || tv.PollInterval <= 0 || tv.Debounce < 0 {
 			errs = append(errs, errors.New("auto_pause.tv: port must be 1-65535, poll_interval > 0, debounce >= 0"))
 		}
+	}
+	if c.Log.Format != "text" && c.Log.Format != "json" {
+		errs = append(errs, fmt.Errorf("log.format must be text or json, not %q", c.Log.Format))
+	}
+	if dd := c.Datadog; dd.Enabled && (dd.Service == "" || dd.NowPlayingInterval <= 0) {
+		errs = append(errs, errors.New("datadog: service is required and now_playing_interval must be > 0"))
 	}
 	if ip := c.IdlePause; ip.Enabled && (ip.AfterMinutes <= 0 || ip.WarningSeconds <= 0) {
 		errs = append(errs, errors.New("idle_pause: after_minutes and warning_seconds must be > 0"))

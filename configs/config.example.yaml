@@ -73,6 +73,25 @@ auto_pause:
     poll_interval: 2s
     debounce: 3s               # rule 2: how long the TV must stay unreachable
 
+# Log written to stderr (the systemd journal): text or json.
+log:
+  format: text
+
+# Datadog (optional): metrics and events through DogStatsD, traces (APM) through
+# the trace agent, and dd.trace_id/dd.span_id in the log. The daemon works the
+# same if the agent is not running. DD_SERVICE, DD_ENV, DD_AGENT_HOST,
+# DD_DOGSTATSD_PORT and DD_TRACE_AGENT_PORT override these values.
+# Metrics, events and spans: docs/DATADOG.md
+datadog:
+  enabled: false
+  service: apple-remote-kodi-connector
+  env: ""                    # e.g. home
+  agent_host: localhost
+  statsd_port: 8125
+  trace_port: 8126
+  tracing: true
+  now_playing_interval: 10s  # how often to ask Kodi what is playing
+
 # Button mapping. Keys: Linux key names (or their numeric code).
 # Apple Remote buttons: KEY_MENU, KEY_PLAYPAUSE, KEY_ENTER (center),
 # KEY_VOLUMEUP (up), KEY_VOLUMEDOWN (down), KEY_BACK (left), KEY_FORWARD (right).

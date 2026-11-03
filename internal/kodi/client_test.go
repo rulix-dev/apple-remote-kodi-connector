@@ -233,3 +233,59 @@ func TestPlayingAndNotify(t *testing.T) {
 		t.Fatalf("GUI.ShowNotification params = %s", notify)
 	}
 }
+
+func TestNowPlaying(t *testing.T) {
+	c, _ := fakeKodi(t, func(req rpcRequest) string {
+		switch req.Method {
+		case "Player.GetActivePlayers":
+			return `{"id":1,"jsonrpc":"2.0","result":[{"playerid":1,"type":"video"}]}`
+		case "Player.GetItem":
+			return `{"id":1,"jsonrpc":"2.0","result":{"item":{"type":"episode","label":"Pilot","title":"Pilot","showtitle":"Some Show","season":1,"episode":2,"year":2008}}}`
+		case "Player.GetProperties":
+			return `{"id":1,"jsonrpc":"2.0","result":{"speed":0}}`
+		}
+		return ""
+	})
+	it, err := c.NowPlaying(context.Background())
+	if err != nil || it == nil {
+		t.Fatalf("NowPlaying() = %v, %v", it, err)
+	}
+	if it.MediaType() != "episode" || it.Playing || it.Display() != "Some Show S01E02 · Pilot" {
+		t.Fatalf("NowPlaying() = %+v, display %q", it, it.Display())
+	}
+}
+
+func TestNowPlayingNothing(t *testing.T) {
+	c, _ := fakeKodi(t, func(rpcRequest) string { return `{"id":1,"jsonrpc":"2.0","result":[]}` })
+	if it, err := c.NowPlaying(context.Background()); err != nil || it != nil {
+		t.Fatalf("NowPlaying() = %v, %v; want nil, nil", it, err)
+	}
+}
+
+func TestItemDisplay(t *testing.T) {
+	tests := map[string]Item{
+		"Movie (2001)": {Type: "movie", Title: "Movie", Year: 2001},
+		"Song":         {Type: "song", Title: "Song"},
+		"label only":   {Player: "video", Type: "unknown", Label: "label only"},
+	}
+	for want, it := range tests {
+		if got := it.Display(); got != want {
+			t.Errorf("Display() = %q, want %q", got, want)
+		}
+	}
+	if (Item{Player: "audio", Type: "unknown"}).MediaType() != "audio" {
+		t.Error("MediaType() should fall back to the player type")
+	}
+}
+
+func TestErrorClass(t *testing.T) {
+	if got := errorClass(fmt.Errorf("x: %w", ErrUnauthorized)); got != "unauthorized" {
+		t.Errorf("errorClass(401) = %q", got)
+	}
+	if got := errorClass(&RPCError{Code: -1}); got != "rpc" {
+		t.Errorf("errorClass(rpc) = %q", got)
+	}
+	if got := errorClass(context.DeadlineExceeded); got != "timeout" {
+		t.Errorf("errorClass(deadline) = %q", got)
+	}
+}
