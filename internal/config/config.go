@@ -135,6 +135,9 @@ type Kodi struct {
 	StartupGrace   time.Duration `yaml:"startup_grace"`
 	QuitTimeout    time.Duration `yaml:"quit_timeout"`
 	SignalFallback bool          `yaml:"signal_fallback"`
+	// HWDecodeCodecs are the video codecs (Kodi names) the GPU decodes; any
+	// other codec is reported as decoded by the CPU.
+	HWDecodeCodecs []string `yaml:"hw_decode_codecs"`
 }
 
 // Button maps a key to the actions for a short and a long press.
@@ -195,6 +198,7 @@ func defaults() Config {
 			StartupGrace:   60 * time.Second,
 			QuitTimeout:    20 * time.Second,
 			SignalFallback: true,
+			HWDecodeCodecs: []string{"h264", "mpeg2video", "vc1", "wmv3"},
 		},
 		IdlePause: IdlePause{Enabled: true, AfterMinutes: 60, WarningSeconds: 20},
 		Log:       Log{Format: "text"},

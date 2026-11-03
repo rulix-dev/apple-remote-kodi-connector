@@ -289,3 +289,70 @@ func TestErrorClass(t *testing.T) {
 		t.Errorf("errorClass(deadline) = %q", got)
 	}
 }
+
+func TestNowPlayingStreamFormat(t *testing.T) {
+	c, _ := fakeKodi(t, func(req rpcRequest) string {
+		switch {
+		case req.Method == "Player.GetActivePlayers":
+			return `{"id":1,"jsonrpc":"2.0","result":[{"playerid":1,"type":"video"}]}`
+		case req.Method == "Player.GetItem":
+			return `{"id":1,"jsonrpc":"2.0","result":{"item":{"type":"movie","label":"M","title":"M","year":2001}}}`
+		case strings.Contains(string(req.Params), "currentvideostream"):
+			return `{"id":1,"jsonrpc":"2.0","result":{"currentvideostream":{"codec":"hevc","width":1920,"height":800,"hdrtype":""},"currentaudiostream":{"codec":"eac3","channels":6}}}`
+		default:
+			return `{"id":1,"jsonrpc":"2.0","result":{"speed":1}}`
+		}
+	})
+	it, err := c.NowPlaying(context.Background())
+	if err != nil || it == nil {
+		t.Fatalf("NowPlaying() = %v, %v", it, err)
+	}
+	if it.VideoCodec != "hevc" || it.Width != 1920 || it.Height != 800 || it.AudioCodec != "eac3" || it.AudioChannels != 6 {
+		t.Fatalf("stream format = %+v", it)
+	}
+	if it.Resolution() != "1080p" {
+		t.Errorf("Resolution() = %q, want 1080p (cropped 1920x800)", it.Resolution())
+	}
+	hw := []string{"h264", "mpeg2video", "vc1", "wmv3"}
+	if it.Decode(hw) != "cpu" {
+		t.Errorf("Decode(hevc) = %q, want cpu", it.Decode(hw))
+	}
+	it.VideoCodec = "H264"
+	if it.Decode(hw) != "hardware" {
+		t.Errorf("Decode(H264) = %q, want hardware", it.Decode(hw))
+	}
+}
+
+func TestNowPlayingWithoutStreamFormat(t *testing.T) {
+	// If the stream properties fail, the item is still returned.
+	c, _ := fakeKodi(t, func(req rpcRequest) string {
+		switch {
+		case req.Method == "Player.GetActivePlayers":
+			return `{"id":1,"jsonrpc":"2.0","result":[{"playerid":1,"type":"video"}]}`
+		case req.Method == "Player.GetItem":
+			return `{"id":1,"jsonrpc":"2.0","result":{"item":{"type":"movie","title":"M"}}}`
+		case strings.Contains(string(req.Params), "currentvideostream"):
+			return `{"id":1,"jsonrpc":"2.0","error":{"code":-32602,"message":"Invalid params."}}`
+		default:
+			return `{"id":1,"jsonrpc":"2.0","result":{"speed":1}}`
+		}
+	})
+	it, err := c.NowPlaying(context.Background())
+	if err != nil || it == nil || it.VideoCodec != "" {
+		t.Fatalf("NowPlaying() = %+v, %v; want the item without format", it, err)
+	}
+}
+
+func TestResolution(t *testing.T) {
+	for want, wh := range map[string][2]int{
+		"2160p": {3840, 2160}, "1080p": {1920, 1080}, "720p": {1280, 720},
+		"480p": {720, 480}, "sd": {480, 360}, "": {0, 0},
+	} {
+		if got := (Item{Width: wh[0], Height: wh[1]}).Resolution(); got != want {
+			t.Errorf("Resolution(%dx%d) = %q, want %q", wh[0], wh[1], got, want)
+		}
+	}
+	if (Item{Player: "audio", AudioCodec: "flac"}).Decode([]string{"flac"}) != "" {
+		t.Error("Decode() must be empty for non-video items")
+	}
+}

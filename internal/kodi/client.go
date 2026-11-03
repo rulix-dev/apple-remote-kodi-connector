@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -251,6 +252,52 @@ type Item struct {
 	Episode   int
 	Year      int
 	Playing   bool // false when paused
+
+	// Stream format; empty/zero if Kodi did not report it (yet).
+	VideoCodec    string // as reported by Kodi: hevc, h264, mpeg4...
+	Width         int
+	Height        int
+	HDR           string // hdrtype: hdr10, dolbyvision, hlg... (empty for SDR)
+	AudioCodec    string
+	AudioChannels int
+}
+
+// IsVideo reports whether the item plays in the video player.
+func (it Item) IsVideo() bool { return it.Player == "video" }
+
+// Resolution is a standard label for the video size: 2160p, 1080p, 720p,
+// 480p, or "sd" below that; empty if unknown. Width counts too, so that
+// cropped videos (e.g. 1920x800) still map to their nominal resolution.
+func (it Item) Resolution() string {
+	switch {
+	case it.Width <= 0 && it.Height <= 0:
+		return ""
+	case it.Width >= 3200 || it.Height >= 2000:
+		return "2160p"
+	case it.Width >= 1800 || it.Height >= 1000:
+		return "1080p"
+	case it.Width >= 1200 || it.Height >= 700:
+		return "720p"
+	case it.Width >= 640 || it.Height >= 460:
+		return "480p"
+	default:
+		return "sd"
+	}
+}
+
+// Decode tells whether the video is decoded by the GPU ("hardware") or the
+// CPU, given the codecs the GPU accelerates; empty for non-video items or an
+// unknown codec.
+func (it Item) Decode(hwCodecs []string) string {
+	if !it.IsVideo() || it.VideoCodec == "" {
+		return ""
+	}
+	for _, c := range hwCodecs {
+		if strings.EqualFold(c, it.VideoCodec) {
+			return "hardware"
+		}
+	}
+	return "cpu"
 }
 
 // MediaType is Type, or the player type if Kodi does not know the item type.
@@ -313,10 +360,36 @@ func (c *Client) NowPlaying(ctx context.Context) (*Item, error) {
 		return nil, err
 	}
 	it := r.Item
-	return &Item{
+	item := &Item{
 		Player: p.Type, Type: it.Type, Label: it.Label, Title: it.Title, ShowTitle: it.ShowTitle,
 		Season: it.Season, Episode: it.Episode, Year: it.Year, Playing: props.Speed != 0,
-	}, nil
+	}
+	// The stream format is best effort: if Kodi does not answer, the item is
+	// still returned without it.
+	if p.Type == "video" || p.Type == "audio" {
+		var streams struct {
+			Video struct {
+				Codec   string `json:"codec"`
+				Width   int    `json:"width"`
+				Height  int    `json:"height"`
+				HDRType string `json:"hdrtype"`
+			} `json:"currentvideostream"`
+			Audio struct {
+				Codec    string `json:"codec"`
+				Channels int    `json:"channels"`
+			} `json:"currentaudiostream"`
+		}
+		properties := []string{"currentaudiostream"}
+		if p.Type == "video" {
+			properties = append(properties, "currentvideostream")
+		}
+		if err := c.Call(ctx, "Player.GetProperties", map[string]any{"playerid": p.PlayerID, "properties": properties}, &streams); err == nil {
+			item.VideoCodec, item.Width, item.Height = streams.Video.Codec, streams.Video.Width, streams.Video.Height
+			item.HDR = streams.Video.HDRType
+			item.AudioCodec, item.AudioChannels = streams.Audio.Codec, streams.Audio.Channels
+		}
+	}
+	return item, nil
 }
 
 // CurrentWindow returns the id of the active Kodi window (see WindowID).

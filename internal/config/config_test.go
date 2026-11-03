@@ -161,3 +161,14 @@ func TestDatadogDefaults(t *testing.T) {
 		t.Fatalf("datadog/log config = %+v %+v", d, c.Log)
 	}
 }
+
+func TestHWDecodeCodecs(t *testing.T) {
+	c, err := Parse([]byte("{}"))
+	if err != nil || len(c.Kodi.HWDecodeCodecs) != 4 || c.Kodi.HWDecodeCodecs[0] != "h264" {
+		t.Fatalf("default hw_decode_codecs = %v, %v", c.Kodi.HWDecodeCodecs, err)
+	}
+	c, err = Parse([]byte("kodi: {hw_decode_codecs: [hevc]}"))
+	if err != nil || len(c.Kodi.HWDecodeCodecs) != 1 || c.Kodi.HWDecodeCodecs[0] != "hevc" {
+		t.Fatalf("hw_decode_codecs must replace the default, got %v, %v", c.Kodi.HWDecodeCodecs, err)
+	}
+}
