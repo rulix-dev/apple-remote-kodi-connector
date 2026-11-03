@@ -1,6 +1,6 @@
 # Datadog
 
-Enabled with `datadog.enabled: true` (see `configs/config.example.yaml`). Every metric, event and span carries `service`, `env` and `version` (the binary version).
+Enabled by default (`datadog.enabled: true`, `env: prod`; see `configs/config.example.yaml`). Every metric, event and span carries `service`, `env` and `version` (the binary version).
 
 ## Metrics
 
